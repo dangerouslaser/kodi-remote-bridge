@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Remote Bridge for Kodi</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: "LG Display", "Museo Sans", sans-serif;
+    background: #12191f; color: #e8e8e8;
+    width: 1920px; height: 1080px; overflow: hidden;
+    padding: 56px 120px;
+  }
+  h1 { font-size: 56px; font-weight: 300; margin-bottom: 8px; }
+  h1 .bolt { color: #17b2e7; }
+  .subtitle { font-size: 26px; color: #9aa5c4; margin-bottom: 32px; }
+  .card {
+    background: #1a2630; border-radius: 16px; padding: 32px 40px;
+    margin-bottom: 24px;
+  }
+  .status-row { display: flex; align-items: center; gap: 24px; margin-bottom: 14px; font-size: 30px; }
+  .status-row:last-child { margin-bottom: 0; }
+  .dot { width: 24px; height: 24px; border-radius: 50%; background: #666; flex: none; }
+  .dot.ok { background: #4caf50; } .dot.bad { background: #ef5350; } .dot.warn { background: #17b2e7; }
+  .label { color: #9aa5c4; width: 420px; flex: none; }
+  .value { font-weight: 500; }
+  .buttons { display: flex; gap: 32px; margin-top: 32px; }
+  button {
+    font-size: 32px; padding: 22px 56px; border-radius: 12px; border: 4px solid transparent;
+    background: #2b3d66; color: #e8e8e8; outline: none; cursor: pointer;
+  }
+  button:focus { border-color: #17b2e7; background: #35497a; }
+  button.primary { background: #2e6b4f; }
+  button.primary:focus { background: #388059; }
+  button.danger { background: #6b2e2e; }
+  button.danger:focus { background: #803838; }
+  button:disabled { opacity: 0.45; cursor: default; }
+  #log { font-family: monospace; font-size: 20px; line-height: 1.35; color: #9aa5c4;
+         white-space: pre-wrap; height: 260px; overflow: hidden; }
+</style>
+<body>
+  <h1 id="headline">Remote Bridge for Kodi</h1>
+  <div class="subtitle">Sends this TV's remote buttons to Kodi while Kodi is on screen</div>
+
+  <div class="card">
+    <div class="status-row"><div class="dot" id="dot-root"></div><div class="label">Root access (Homebrew Channel)</div><div class="value" id="v-root">checking&hellip;</div></div>
+    <div class="status-row"><div class="dot" id="dot-installed"></div><div class="label">Startup hook</div><div class="value" id="v-installed">checking&hellip;</div></div>
+    <div class="status-row"><div class="dot" id="dot-unit"></div><div class="label">Bridge service</div><div class="value" id="v-unit">checking&hellip;</div></div>
+    <div class="status-row"><div class="dot" id="dot-kodi"></div><div class="label">Kodi</div><div class="value" id="v-kodi">checking&hellip;</div></div>
+  </div>
+
+  <div class="card"><div id="log">Loading&hellip;</div></div>
+
+  <div class="buttons">
+    <button id="btn-refresh">Refresh</button>
+    <button id="btn-remove" class="danger">Remove</button>
+  </div>
+
+<script src="app.js"></script>
+</body>
+</html>
