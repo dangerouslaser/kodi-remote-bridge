@@ -19,9 +19,11 @@ Protocol, one JSON object per line:
   -> {"wheel": steps, "dev": index}
   -> {"pos": [x, y]}                 pointer position, only while grabbed
   <- {"grab": bool, "consume": [key codes Kodi handles], "pointer": bool}
-  -> {"cursor": {"point", "hover", "hold", "drag": base64 PNG}}   once per connection:
-                                     this TV's own pointer images, so Kodi's cursor
-                                     matches it without shipping LG's artwork
+  -> {"cursor": {"point", "hover", "hold", "drag": base64 PNG}, "hotspot": "corner" | "tip"}
+                                     once per connection: this TV's own pointer images,
+                                     so Kodi's cursor matches it without shipping LG's
+                                     artwork. "corner": the click point is the shape's
+                                     top-left corner, "tip": its topmost point
 """
 
 from __future__ import print_function
@@ -38,7 +40,7 @@ import struct
 import sys
 import time
 
-VERSION = "0.2.1"
+VERSION = "0.2.2"
 CONFIG = os.environ.get("KODIREMOTE_CONFIG", "/var/lib/webosbrew/kodiremote.json")
 LOG = os.environ.get("KODIREMOTE_LOG", "/home/root/kodiremote.log")
 DEVICES = os.environ.get("KODIREMOTE_DEVICES", "/proc/bus/input/devices")
@@ -63,9 +65,12 @@ EVENT_SIZE = struct.calcsize(EVENT)
 # _IOW('E', 0x90, int) and _IOR('E', 0x40 + axis, struct input_absinfo)
 EVIOCGRAB = 0x40044590
 EVIOCGABS = 0x80184540
-# webOS pointer images: cursorType<KIND>sz<S|M|L>stN.png
 CURSOR_DIR = "/usr/share/im"
-CURSOR_KINDS = {"point": "POINT", "hover": "HOVER", "hold": "HOLD", "drag": "DRAG"}
+# The current webOS pointer (a translucent circle with one pointed corner):
+# cursorTypeAsz<S|M|L>st<frame>.png. S0 is its resting frame, P0 pressed.
+CURSOR_CURRENT = {"point": "S0", "hover": "S0", "hold": "P0", "drag": "S0"}
+# The older hand and teardrop: cursorType<KIND>sz<S|M|L>stN.png.
+CURSOR_CLASSIC = {"point": "POINT", "hover": "HOVER", "hold": "HOLD", "drag": "DRAG"}
 CURSOR_MAX = 256 * 1024
 
 
@@ -120,16 +125,22 @@ def list_devices(pattern):
 
 
 def cursor_images(size="M"):
-    images = {}
-    for key, kind in CURSOR_KINDS.items():
-        path = os.path.join(CURSOR_DIR, "cursorType%ssz%sstN.png" % (kind, size))
-        try:
-            if os.path.getsize(path) <= CURSOR_MAX:
-                with open(path, "rb") as f:
-                    images[key] = base64.b64encode(f.read()).decode("ascii")
-        except (IOError, OSError):
-            pass
-    return images
+    """(kind -> base64 PNG, hotspot rule) for this TV's pointer, or ({}, None)."""
+    current = dict((k, "cursorTypeAsz%sst%s.png" % (size, frame)) for k, frame in CURSOR_CURRENT.items())
+    classic = dict((k, "cursorType%ssz%sstN.png" % (kind, size)) for k, kind in CURSOR_CLASSIC.items())
+    for names, hotspot in ((current, "corner"), (classic, "tip")):
+        images = {}
+        for key, name in names.items():
+            path = os.path.join(CURSOR_DIR, name)
+            try:
+                if os.path.getsize(path) <= CURSOR_MAX:
+                    with open(path, "rb") as f:
+                        images[key] = base64.b64encode(f.read()).decode("ascii")
+            except (IOError, OSError):
+                pass
+        if "point" in images:
+            return images, hotspot
+    return {}, None
 
 
 def output_device_name():
@@ -379,9 +390,9 @@ class Bridge(object):
         if msg.get("ok") and not self.accepted:
             self.accepted = True
             log("connected to Kodi at %s:%s" % (self.config["host"], self.config["port"]))
-            images = cursor_images()
+            images, hotspot = cursor_images()
             if images:
-                self.send({"cursor": images})
+                self.send({"cursor": images, "hotspot": hotspot})
         if "grab" in msg:
             self.consume = set(int(c) for c in msg.get("consume") or [])
             self.pointer = bool(msg.get("pointer"))
