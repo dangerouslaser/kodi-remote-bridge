@@ -71,10 +71,10 @@ function returnTo(appId) {
 
 function probeCmd() {
   return 'echo ROOT_OK; ' +
-    'command -v node >/dev/null 2>&1 && echo NODE:$(node --version) || echo NODE:missing; ' +
+    'echo PY:$( (python3 --version || python --version) 2>&1 | head -n 1 | tr " " _); ' +
     '[ -x ' + HOOK + ' ] && echo HOOK_OK || echo HOOK_NO; ' +
     'echo UNIT:$( (systemctl is-active ' + UNIT + ' 2>/dev/null) || ' +
-    '(pgrep -f assets/bridge.js >/dev/null && echo active) || echo inactive); ' +
+    '(pgrep -f assets/bridge.py >/dev/null && echo active) || echo inactive); ' +
     'echo "---CONFIG---"; cat ' + CONFIG + ' 2>/dev/null; echo; ' +
     'echo "---LOG---"; tail -n 8 ' + LOGFILE + ' 2>/dev/null';
 }
@@ -92,13 +92,13 @@ function refresh(cb) {
       return;
     }
     setDot('root', 'ok', 'available');
-    var node = (out.match(/NODE:(\S*)/) || [])[1] || 'missing';
+    var py = ((out.match(/PY:(\S*)/) || [])[1] || 'missing').replace(/_/g, ' ');
     var unit = (out.match(/UNIT:(\S*)/) || [])[1] || 'unknown';
     var conf = null;
     try { conf = JSON.parse(out.split('---CONFIG---')[1].split('---LOG---')[0]); } catch (e) { conf = null; }
     var hook = out.indexOf('HOOK_OK') >= 0;
 
-    setDot('installed', hook ? 'ok' : 'warn', hook ? 'installed (node ' + node + ')' : 'not set up');
+    setDot('installed', hook ? 'ok' : 'warn', hook ? 'installed (' + py + ')' : 'not set up');
     setDot('unit', unit === 'active' ? 'ok' : 'warn', unit === 'active' ? 'running' : unit);
     setDot('kodi', conf ? 'ok' : 'warn',
            conf ? conf.host + ':' + conf.port : 'not set: set it up from Kodi (LG TV settings)');
@@ -144,7 +144,7 @@ function remove(p) {
   headline('Removing…');
   var cmd = [
     'systemctl stop ' + UNIT + ' 2>/dev/null',
-    'pkill -f assets/bridge.js 2>/dev/null',
+    'pkill -f assets/bridge.py 2>/dev/null',
     'rm -f ' + HOOK + ' ' + CONFIG + ' /run/systemd/system/' + UNIT,
     'systemctl daemon-reload 2>/dev/null',
     'echo REMOVED'

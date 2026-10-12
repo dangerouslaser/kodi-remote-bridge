@@ -13,15 +13,16 @@
 SELF=$(readlink -f "$0" 2>/dev/null)
 case "$SELF" in
   */assets/97-kodiremote)
-    DAEMON="${SELF%/97-kodiremote}/bridge.js" ;;
+    DAEMON="${SELF%/97-kodiremote}/bridge.py" ;;
   *)
-    DAEMON=/media/developer/apps/usr/palm/applications/com.github.dangerouslaser.kodiremote/assets/bridge.js ;;
+    DAEMON=/media/developer/apps/usr/palm/applications/com.github.dangerouslaser.kodiremote/assets/bridge.py ;;
 esac
 LOG=/home/root/kodiremote.log
 
 [ -f "$DAEMON" ] || exit 0
 
-NODE=$(command -v node || echo /usr/bin/node)
+# webOS 5 has Python 2, newer firmware Python 3.
+PY=$(command -v python3 || command -v python || echo /usr/bin/python3)
 
 if command -v systemctl >/dev/null 2>&1; then
   mkdir -p /run/systemd/system
@@ -31,7 +32,7 @@ Description=Remote Bridge for Kodi (forward TV remote buttons to Kodi)
 After=ls-hubd.service
 
 [Service]
-ExecStart=$NODE $DAEMON
+ExecStart=$PY -u $DAEMON
 Restart=always
 RestartSec=5
 UNIT
@@ -42,6 +43,6 @@ else
   pkill -f "kodiremote-loop" 2>/dev/null
   pkill -f "$DAEMON" 2>/dev/null
   # Restart loop in place of systemd's Restart=always (the daemon exits after an app update).
-  nohup sh -c "while true; do \"$NODE\" \"$DAEMON\"; sleep 5; done # kodiremote-loop" >/dev/null 2>&1 &
+  nohup sh -c "while true; do \"$PY\" -u \"$DAEMON\"; sleep 5; done # kodiremote-loop" >/dev/null 2>&1 &
   echo "$(date) 97-kodiremote: no systemd, started in the background ($DAEMON)" >> $LOG
 fi
