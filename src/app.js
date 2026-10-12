@@ -75,6 +75,7 @@ function probeCmd() {
     '[ -x ' + HOOK + ' ] && echo HOOK_OK || echo HOOK_NO; ' +
     'echo UNIT:$( (systemctl is-active ' + UNIT + ' 2>/dev/null) || ' +
     '(pgrep -f assets/bridge.py >/dev/null && echo active) || echo inactive); ' +
+    'echo RUNNING:$(grep -o "Remote Bridge [0-9.]* started" ' + LOGFILE + ' 2>/dev/null | tail -n 1 | cut -d" " -f3); ' +
     'echo "---CONFIG---"; cat ' + CONFIG + ' 2>/dev/null; echo; ' +
     'echo "---LOG---"; tail -n 8 ' + LOGFILE + ' 2>/dev/null';
 }
@@ -94,12 +95,14 @@ function refresh(cb) {
     setDot('root', 'ok', 'available');
     var py = ((out.match(/PY:(\S*)/) || [])[1] || 'missing').replace(/_/g, ' ');
     var unit = (out.match(/UNIT:(\S*)/) || [])[1] || 'unknown';
+    var running = (out.match(/RUNNING:(\S+)/) || [])[1];
     var conf = null;
     try { conf = JSON.parse(out.split('---CONFIG---')[1].split('---LOG---')[0]); } catch (e) { conf = null; }
     var hook = out.indexOf('HOOK_OK') >= 0;
 
     setDot('installed', hook ? 'ok' : 'warn', hook ? 'installed (' + py + ')' : 'not set up');
-    setDot('unit', unit === 'active' ? 'ok' : 'warn', unit === 'active' ? 'running' : unit);
+    setDot('unit', unit === 'active' ? 'ok' : 'warn',
+           unit === 'active' ? 'running' + (running ? ' (' + running + ')' : '') : unit);
     setDot('kodi', conf ? 'ok' : 'warn',
            conf ? conf.host + ':' + conf.port : 'not set: set it up from Kodi (LG TV settings)');
     log((out.split('---LOG---')[1] || '').trim() || '(no log yet)');
@@ -157,6 +160,34 @@ function remove(p) {
   });
 }
 
+/* The daemon restarts itself after an app update; this is for anything else. */
+function restart() {
+  headline('Restarting the bridge…');
+  rootExec('(systemctl restart ' + UNIT + ' 2>/dev/null || sh ' + HOOK + ') && echo RESTARTED', function (r) {
+    if (output(r).indexOf('RESTARTED') < 0) {
+      headline('Restart failed');
+      log(output(r) || JSON.stringify(r));
+      return;
+    }
+    setTimeout(function () {
+      waitRunning(5, function (ok) {
+        headline(ok ? 'Remote Bridge for Kodi' : 'The bridge did not come back (see the log)');
+      });
+    }, 1500);
+  });
+}
+
+function showVersion() {
+  var req = new XMLHttpRequest();
+  req.onload = function () {
+    try {
+      document.getElementById('version').textContent = ' · version ' + JSON.parse(req.responseText).version;
+    } catch (e) { /* no version shown */ }
+  };
+  req.open('GET', 'appinfo.json');
+  req.send();
+}
+
 function handleParams(p) {
   if (p && p.action === 'remove') { remove(p); return; }
   if (p && p.kodiHost && p.kodiPort && p.token) { setup(p); return; }
@@ -171,9 +202,10 @@ function launchParams() {
 document.addEventListener('webOSRelaunch', function (e) { handleParams(e.detail || {}); });
 
 document.getElementById('btn-refresh').addEventListener('click', function () { refresh(); });
+document.getElementById('btn-restart').addEventListener('click', function () { restart(); });
 document.getElementById('btn-remove').addEventListener('click', function () { remove({}); });
 
-var buttons = ['btn-refresh', 'btn-remove'];
+var buttons = ['btn-refresh', 'btn-restart', 'btn-remove'];
 var focusIdx = 0;
 function focusBtn(i) {
   focusIdx = (i + buttons.length) % buttons.length;
@@ -185,6 +217,7 @@ document.addEventListener('keydown', function (e) {
 });
 
 window.addEventListener('load', function () {
+  showVersion();
   focusBtn(0);
   handleParams(launchParams());
 });
