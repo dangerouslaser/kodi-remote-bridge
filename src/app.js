@@ -4,6 +4,10 @@
  * remove it, so nobody has to open a shell on the TV:
  *   {"kodiHost", "kodiPort", "token", "returnTo"}  set up, then switch back
  *   {"action": "remove", "returnTo"}               remove, then switch back
+ *   {"action": "update", "ipkUrl", "ipkHash", "returnTo"}
+ *                                                  install a newer version (the one
+ *                                                  bundled with Kodi's add-on), then
+ *                                                  switch back
  * Opened from the launcher it shows the bridge's status.
  *
  * Privileged work goes through the Homebrew Channel root shell
@@ -188,8 +192,28 @@ function showVersion() {
   req.send();
 }
 
+/* Homebrew Channel installs it over this app; the daemon restarts itself on
+ * the new files. Back to Kodi right away: the install may close this app. */
+function update(p) {
+  headline('Updating the Remote Bridge…');
+  luna('luna://org.webosbrew.hbchannel.service/install',
+       { ipkUrl: String(p.ipkUrl), ipkHash: String(p.ipkHash), subscribe: true }, function (r) {
+    if (r && r.returnValue === false) {
+      headline('Update failed');
+      log(r.errorText || JSON.stringify(r));
+      return;
+    }
+    if (r && r.statusText) log(r.statusText);
+    if (r && r.finished) {
+      headline('Updated: returning to Kodi');
+      returnTo(p.returnTo);
+    }
+  });
+}
+
 function handleParams(p) {
   if (p && p.action === 'remove') { remove(p); return; }
+  if (p && p.action === 'update' && p.ipkUrl && p.ipkHash) { update(p); return; }
   if (p && p.kodiHost && p.kodiPort && p.token) { setup(p); return; }
   headline('Remote Bridge for Kodi');
   refresh();

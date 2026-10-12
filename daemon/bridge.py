@@ -51,7 +51,7 @@ import subprocess
 import sys
 import time
 
-VERSION = "0.4.2"
+VERSION = "0.5.0"
 CONFIG = os.environ.get("KODIREMOTE_CONFIG", "/var/lib/webosbrew/kodiremote.json")
 LOG = os.environ.get("KODIREMOTE_LOG", "/home/root/kodiremote.log")
 DEVICES = os.environ.get("KODIREMOTE_DEVICES", "/proc/bus/input/devices")
