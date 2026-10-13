@@ -19,8 +19,9 @@ Tested on webOS 5.5 (CX), 9 (B4) and 10 (G5).
   (`daemon/97-kodiremote`). While Kodi is on screen it grabs the remote's input
   devices and streams buttons, pointer and wheel to Kodi (newline JSON over
   TCP, port 9779 by default); otherwise the TV has the remote. It also mirrors
-  the TV's pointer settings and images to Kodi, and hands the pointer back to
-  webOS where Kodi's pointer was.
+  the TV's pointer settings and images to Kodi, tells it which Magic Remote is
+  paired (model, number keys, mute key), and hands the pointer back to webOS
+  where Kodi's pointer was.
 
 ## Install
 

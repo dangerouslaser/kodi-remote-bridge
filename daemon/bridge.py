@@ -34,6 +34,18 @@ Protocol, one JSON object per line:
   -> {"warped": [x, y]}              it's there
   <- {"press": code}                 press and release that button for the TV (a
                                      button Kodi took, e.g. a held Home)
+  -> {"overlay": state}              the TV's own UI over Kodi (surfacemanager
+                                     currentState): "none", or e.g. "launcher" (the
+                                     Home cards row on webOS 5), "quick-menu" (the
+                                     settings overlay). While it's up the TV has the
+                                     remote, whatever Kodi asked, and no buttons go to
+                                     Kodi: they're for the overlay
+  -> {"remote": {"model", "name", "paired", "numeric", "mute", "cursor"}}
+                                     the paired Magic Remote (mrcu/isPaired), on
+                                     connecting and whenever it changes: model "MR20",
+                                     "MR25GA"... ("" if none), whether it has number
+                                     keys, a mute key and a pointer (null: not reported,
+                                     as on webOS 5)
 """
 
 from __future__ import print_function
@@ -51,7 +63,7 @@ import subprocess
 import sys
 import time
 
-VERSION = "0.5.0"
+VERSION = "0.6.3"
 CONFIG = os.environ.get("KODIREMOTE_CONFIG", "/var/lib/webosbrew/kodiremote.json")
 LOG = os.environ.get("KODIREMOTE_LOG", "/home/root/kodiremote.log")
 DEVICES = os.environ.get("KODIREMOTE_DEVICES", "/proc/bus/input/devices")
@@ -114,6 +126,11 @@ CURSOR_SHOW, CURSOR_HIDE = 1198, 1199
 LUNA_SEND = "luna-send"
 # On connecting, wait this long for the TV's settings before sending the cursor.
 SETTINGS_WAIT = 3.0
+REMOTE_URI = "luna://com.webos.service.mrcu/isPaired"
+OVERLAY_URI = "luna://com.webos.surfacemanager/getCurrentState"
+# States that take no input: the remote stays Kodi's ("spinner": the TV's loading
+# spinner, up for many seconds around an input switch or an app update).
+NO_OVERLAY = ("", "none", "spinner")
 
 
 def log(text):
@@ -198,6 +215,30 @@ def output_device_name():
     return "LGE M-RCU - Builtin [1]" if webos_major() >= 10 else "LGE M-RCU - Builtin [2]"
 
 
+def remote_info(reply):
+    """The paired Magic Remote from an mrcu/isPaired reply. webOS 5 reports only its
+    name ("LGE MR20"); newer firmware also whether it has number keys, a mute key
+    and a pointer."""
+    mrcu = {}
+    for group in reply.get("deviceLists") or []:
+        for entry in (group.get("mrcu") or []) if isinstance(group, dict) else []:
+            if isinstance(entry, dict) and entry.get("isPaired"):
+                mrcu = entry
+    paired = bool(mrcu)
+    name = str(mrcu.get("deviceName") or "") if paired else ""
+
+    def flag(key):
+        for source in (mrcu, reply):
+            if isinstance(source.get(key), bool):
+                return source[key]
+        return None
+
+    cursor = flag("IsNoCursorRemote")
+    return {"model": re.sub(r"^LGE\s+", "", name), "name": name, "paired": paired,
+            "numeric": flag("isNumeric"), "mute": flag("isMuteKey"),
+            "cursor": None if cursor is None else not cursor}
+
+
 def abs_max(fd, axis, default):
     try:
         buf = fcntl.ioctl(fd, EVIOCGABS + axis, b"\0" * 24)
@@ -237,24 +278,31 @@ class Luna(object):
             data = b""
         if data:
             self.buf += data
-            while b"\n" in self.buf:
-                line, self.buf = self.buf.split(b"\n", 1)
-                self.reply(line)
+            self.replies()
             return True
-        self.reply(self.buf)
+        self.replies()
         self.close()
         return False
 
-    def reply(self, line):
-        line = line.strip()
-        if not line:
-            return
-        try:
-            msg = json.loads(line.decode("utf-8"))
-        except ValueError:
-            return
-        if isinstance(msg, dict):
-            self.on_reply(msg)
+    def replies(self):
+        """Each complete JSON object in what's arrived. Some services' replies come
+        on one line, others pretty-printed over several (surfacemanager, webOS 5)."""
+        text = self.buf.decode("utf-8", "replace")
+        decoder = json.JSONDecoder()
+        pos = 0
+        while True:
+            start = text.find("{", pos)
+            if start < 0:
+                pos = len(text)
+                break
+            try:
+                msg, pos = decoder.raw_decode(text, start)
+            except ValueError:
+                pos = start
+                break  # not all of it yet
+            if isinstance(msg, dict):
+                self.on_reply(msg)
+        self.buf = text[pos:].encode("utf-8")
 
     def close(self):
         for pipe in (self.proc.stdin, self.proc.stdout):
@@ -311,6 +359,13 @@ class Bridge(object):
         self.accepted_at = 0.0
         self.warp_to = None        # (x, y, give up at)
         self.warping = None
+        self.kodi_grab = False     # Kodi asks to take the remote over
+        self.overlay = ""          # the TV's UI over Kodi (OVERLAY_URI); "" or "none": none
+        self.overlay_sent = None
+        self.overlay_call = None
+        self.remote = None         # the paired remote, as last read (see remote_info)
+        self.remote_sent = None
+        self.remote_call = None
 
     # -- devices --
 
@@ -435,6 +490,8 @@ class Bridge(object):
             elif value:
                 dev.cursor = code == CURSOR_SHOW
             return
+        if not grabbed and self.overlay_up():
+            return  # the TV's own UI is up: its buttons, not Kodi's
         if etype == EV_KEY:
             if grabbed and code not in self.consume:
                 self.resend(raw)
@@ -527,6 +584,7 @@ class Bridge(object):
             if self.accepted:
                 log("Kodi connection closed")
         self.sock, self.accepted = None, False
+        self.kodi_grab = False
         self.apply_grab(False)
         self.next_connect = time.time() + RETRY
 
@@ -556,7 +614,10 @@ class Bridge(object):
             log("connected to Kodi at %s:%s" % (self.config["host"], self.config["port"]))
             self.tv_sent = self.cursor_sent = None
             self.accepted_at = time.time()
+            self.remote_sent = self.overlay_sent = None
             self.send_settings()
+            self.send_remote()
+            self.send_overlay()
         if isinstance(msg.get("set_tv"), dict):
             self.set_settings(msg["set_tv"])
         if isinstance(msg.get("press"), int):
@@ -569,7 +630,8 @@ class Bridge(object):
         if "grab" in msg:
             self.consume = set(int(c) for c in msg.get("consume") or [])
             self.pointer = bool(msg.get("pointer"))
-            self.apply_grab(bool(msg["grab"]) and self.accepted)
+            self.kodi_grab = bool(msg["grab"]) and self.accepted
+            self.update_grab()
 
     # -- TV settings --
 
@@ -627,6 +689,56 @@ class Bridge(object):
             self.call("setSystemSettings", {"category": category, "settings": settings},
                       lambda reply, s=settings: reply.get("returnValue") or
                       log("TV refused %s: %s" % (json.dumps(s), reply.get("errorText"))))
+
+    # -- the TV's own UI over Kodi --
+
+    def overlay_up(self):
+        return self.overlay not in NO_OVERLAY
+
+    def update_grab(self):
+        """Take the remote over while Kodi asks, unless the TV shows its own UI."""
+        self.apply_grab(self.kodi_grab and not self.overlay_up())
+
+    def watch_overlay(self):
+        if self.overlay_call is not None and self.overlay_call.fd not in self.luna:
+            self.overlay_call = None  # the subscription ended; subscribe again
+        if self.overlay_call is None:
+            self.overlay_call = self.call(OVERLAY_URI, {"subscribe": True}, self.on_overlay, subscribe=True)
+
+    def on_overlay(self, msg):
+        state = msg.get("currentState")
+        if not isinstance(state, (str, type(u""))) or state == self.overlay:
+            return
+        log("TV UI: %s" % (state or "none"))
+        self.overlay = state
+        self.update_grab()
+        self.send_overlay()
+
+    def send_overlay(self):
+        if self.accepted and self.overlay != self.overlay_sent:
+            self.overlay_sent = self.overlay
+            self.send({"overlay": self.overlay or "none"})
+
+    # -- the paired remote --
+
+    def read_remote(self):
+        """Ask the TV which Magic Remote is paired (again every RESCAN)."""
+        if self.remote_call is not None and self.remote_call.fd not in self.luna:
+            self.remote_call = None  # luna-send ended without a reply
+        if self.remote_call is None:
+            self.remote_call = self.call(REMOTE_URI, {}, self.on_remote)
+
+    def on_remote(self, reply):
+        self.remote_call = None
+        if not reply.get("returnValue"):
+            return
+        self.remote = remote_info(reply)
+        self.send_remote()
+
+    def send_remote(self):
+        if self.accepted and self.remote is not None and self.remote != self.remote_sent:
+            self.remote_sent = dict(self.remote)
+            self.send({"remote": self.remote})
 
     # -- moving the TV's pointer --
 
@@ -692,6 +804,8 @@ class Bridge(object):
                     return
                 self.scan()
                 self.watch_settings()
+                self.watch_overlay()
+                self.read_remote()
             if self.accepted and self.cursor_sent is None:
                 self.send_settings()
             if self.sock is None and now >= self.next_connect:
@@ -700,6 +814,7 @@ class Bridge(object):
                     self.next_connect = now + RETRY
             if self.want_grab and now - self.last_heard > HEARTBEAT_TIMEOUT:
                 log("no heartbeat from Kodi")
+                self.kodi_grab = False
                 self.apply_grab(False)
             fds = list(self.devices) + list(self.luna)
             if self.sock is not None:
