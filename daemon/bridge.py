@@ -19,7 +19,9 @@ Protocol, one JSON object per line:
   -> {"wheel": steps, "dev": index}
   -> {"pos": [x, y]}                 pointer position, only while grabbed
   <- {"grab": bool, "consume": [key codes Kodi handles], "pointer": bool}
-  -> {"cursor": {"point", "hover", "hold", "drag": base64 PNG}, "hotspot": rule}
+  -> {"cursor": {"point", "hover", "hold", "drag", and from 0.6.5 the current
+                 pointer's animations' frames ("scroll0".., "press0"..,
+                 "enter0"..,  "exit0"..): base64 PNG}, "hotspot": rule}
                                      this TV's own pointer images (on connecting, and
                                      when the pointer size or shape changes), so Kodi's
                                      cursor matches it without shipping LG's artwork.
@@ -63,7 +65,7 @@ import subprocess
 import sys
 import time
 
-VERSION = "0.6.3"
+VERSION = "0.6.5"
 CONFIG = os.environ.get("KODIREMOTE_CONFIG", "/var/lib/webosbrew/kodiremote.json")
 LOG = os.environ.get("KODIREMOTE_LOG", "/home/root/kodiremote.log")
 DEVICES = os.environ.get("KODIREMOTE_DEVICES", "/proc/bus/input/devices")
@@ -92,9 +94,14 @@ CURSOR_DIR = "/usr/share/im"
 # The current webOS pointer (a translucent circle with one pointed corner):
 # cursorTypeAsz<S|M|L>st<frame>.png. S0 is its resting frame, P0 pressed.
 CURSOR_CURRENT = {"point": "S0", "hover": "S0", "hold": "P0", "drag": "S0"}
+# Its animations: Kodi's name -> the frames' name after the shape prefix, and
+# how many. Scrolling (the pointer turning into a wheel), pressed, appearing
+# and going.
+CURSOR_ANIMATIONS = {"scroll": ("S", 22), "press": ("P", 6), "enter": ("Entrance", 6), "exit": ("Exit", 3)}
 # The older hand and teardrop: cursorType<KIND>sz<S|M|L>stN.png.
 CURSOR_CLASSIC = {"point": "POINT", "hover": "HOVER", "hold": "HOLD", "drag": "DRAG"}
 CURSOR_MAX = 256 * 1024
+SEND_TIMEOUT = 3.0
 # The pointer settings (Settings > General > Devices > Pointer settings) and
 # their settings-service category.
 TV_SETTINGS = {
@@ -193,6 +200,10 @@ def cursor_images(settings=None):
     current = dict((k, "cursorTypeAsz%sst%s%s.png" % (size, prefix, frame))
                    for k, frame in CURSOR_CURRENT.items())
     plain = dict((k, "cursorTypeAsz%sst%s.png" % (size, frame)) for k, frame in CURSOR_CURRENT.items())
+    for names, shape in ((current, prefix), (plain, "")):
+        for kind, (frame, count) in CURSOR_ANIMATIONS.items():
+            for i in range(count):
+                names["%s%d" % (kind, i)] = "cursorTypeAsz%sst%s%s%d.png" % (size, shape, frame, i)
     classic = dict((k, "cursorType%ssz%sstN.png" % (kind, size)) for k, kind in CURSOR_CLASSIC.items())
     for names, hotspot in ((current, corner), (plain, "corner"), (classic, "tip")):
         images = {}
@@ -552,8 +563,15 @@ class Bridge(object):
     def send(self, msg):
         if not (self.sock and self.accepted):
             return
+        # The socket is non-blocking (the select loop), so a message bigger than
+        # its send buffer (the cursor images, ~150 KB with the scroll animation)
+        # would fail part-way: block until it's all sent, up to SEND_TIMEOUT.
         try:
-            self.sock.sendall((json.dumps(msg) + "\n").encode("utf-8"))
+            self.sock.settimeout(SEND_TIMEOUT)
+            try:
+                self.sock.sendall((json.dumps(msg) + "\n").encode("utf-8"))
+            finally:
+                self.sock.setblocking(False)
         except (IOError, OSError, socket.error):
             self.disconnect()
 

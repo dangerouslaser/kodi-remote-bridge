@@ -1,6 +1,6 @@
 {
   "id": "com.github.dangerouslaser.kodiremote",
-  "version": "0.6.3",
+  "version": "0.6.5",
   "vendor": "Bryan Hoban",
   "type": "web",
   "main": "index.html",
